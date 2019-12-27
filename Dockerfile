@@ -1,137 +1,86 @@
-FROM php:7.2
+FROM php:7-alpine
 
-ENV XDEBUG_VERSION 2.6.0
+RUN set -eux; \
+  apk add --no-cache --virtual .composer-rundeps \
+    bash \
+    coreutils \
+    git \
+    make \
+    mercurial \
+    openssh-client \
+    patch \
+    subversion \
+    tini \
+    unzip \
+    zip
 
-RUN additionalPackages=" \
-        apt-transport-https \
-        git \
-        msmtp-mta \
-        openssh-client \
-        rsync \
-    " \
-    buildDeps=" \
-        freetds-dev \
-        libbz2-dev \
-        libc-client-dev \
-        libenchant-dev \
-        libfreetype6-dev \
-        libgmp3-dev \
-        libicu-dev \
-        libjpeg62-turbo-dev \
-        libkrb5-dev \
-        libldap2-dev \
-        libpng-dev \
-        libpq-dev \
-        libpspell-dev \
-        librabbitmq-dev \
-        libsasl2-dev \
-        libsnmp-dev \
-        libssl-dev \
-        libtidy-dev \
-        libxml2-dev \
-        libxpm-dev \
-        libxslt1-dev \
-        zlib1g-dev \
-    " \
-    && runDeps=" \
-        libc-client2007e \
-        libenchant1c2a \
-        libfreetype6 \
-        libjpeg62-turbo \
-        libpq5 \
-        libsybdb5 \
-        libx11-6 \
-        libxpm4 \
-        libxslt1.1 \
-        snmp \
-    " \
-    && phpModules=" \
-        bcmath \
-        bz2 \
-        calendar \
-        dba \
-        enchant \
-        exif \
-        ftp \
-        gd \
-        gettext \
-        gmp \
-        imap \
-        intl \
-        ldap \
-        mbstring \
-        pcntl \
-        pdo \
-        pdo_dblib \
-        pdo_mysql \
-        pdo_pgsql \
-        shmop \
-        snmp \
-        soap \
-        sockets \
-        sysvmsg \
-        sysvsem \
-        sysvshm \
-        tidy \
-        wddx \
-        xmlrpc \
-        zip \
-    " \
-        #xdebug \
-    && echo "deb http://httpredir.debian.org/debian jessie contrib non-free" > /etc/apt/sources.list.d/additional.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends $additionalPackages $buildDeps $runDeps \
-    && docker-php-source extract \
-    && cd /usr/src/php/ext/ \
-    # && curl -L http://xdebug.org/files/xdebug-$XDEBUG_VERSION.tgz | tar -zxf - \
-    # && mv xdebug-$XDEBUG_VERSION xdebug \
-    && ln -s /usr/include/x86_64-linux-gnu/gmp.h /usr/include/gmp.h \
-    && ln -s /usr/lib/x86_64-linux-gnu/libldap_r.so /usr/lib/libldap.so \
-    && ln -s /usr/lib/x86_64-linux-gnu/libldap_r.a /usr/lib/libldap_r.a \
-    && ln -s /usr/lib/x86_64-linux-gnu/libsybdb.a /usr/lib/libsybdb.a \
-    && ln -s /usr/lib/x86_64-linux-gnu/libsybdb.so /usr/lib/libsybdb.so \
-    && docker-php-ext-configure gd --with-freetype-dir=/usr/include/ --with-jpeg-dir=/usr/include/ --with-xpm-dir=/usr/include/ \
-    && docker-php-ext-configure imap --with-imap --with-kerberos --with-imap-ssl \
-    && docker-php-ext-configure ldap --with-ldap-sasl \
-    && docker-php-ext-install $phpModules \
-    && printf "\n" | pecl install amqp \
-    && pecl install igbinary \
-    && for ext in $phpModules; do \
-           rm -f /usr/local/etc/php/conf.d/docker-php-ext-$ext.ini; \
-       done \
-    && docker-php-source delete \
-    && apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false -o APT::AutoRemove::SuggestsImportant=false $buildDeps \
-    && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+RUN set -eux; \
+  apk add --no-cache --virtual .build-deps \
+    libzip-dev \
+    zlib-dev \
+    curl \
+    unzip \
+    icu-dev \
+    zlib-dev \
+    curl-dev \
+    libpng-dev \
+    libjpeg-turbo \
+    libjpeg-turbo-dev \
+    openssl-dev \
+    freetype-dev \
+    libmcrypt-dev \
+    libxml2-dev \
+    libzip-dev \
+    ssmtp \
+  ; \
+  docker-php-source extract \
+  ; \
+  docker-php-ext-configure gd \
+  ; \
+  docker-php-ext-install -j$(nproc) zip gd curl pdo pdo_mysql soap intl \
+  ; \
+  docker-php-source delete \
+  ; \
+  docker-php-ext-install -j "$(nproc)" \
+    zip \
+  ; \
+  runDeps="$( \
+    scanelf --needed --nobanner --format '%n#p' --recursive /usr/local/lib/php/extensions \
+      | tr ',' '\n' \
+      | sort -u \
+      | awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
+    )"; \
+  apk add --no-cache --virtual .composer-phpext-rundeps $runDeps; \
+  apk del .build-deps
 
-# Install composer and put binary into $PATH
-RUN curl -sS https://getcomposer.org/installer | php \
-    && mv composer.phar /usr/local/bin/ \
-    && ln -s /usr/local/bin/composer.phar /usr/local/bin/composer
+RUN printf "# composer php cli ini settings\n\
+date.timezone=UTC\n\
+memory_limit=-1\n\
+" > $PHP_INI_DIR/php-cli.ini
 
-# Install phpunit and put binary into $PATH
-# RUN curl -sSLo phpunit.phar https://phar.phpunit.de/phpunit.phar \
-#     && chmod 755 phpunit.phar \
-#     && mv phpunit.phar /usr/local/bin/ \
-#     && ln -s /usr/local/bin/phpunit.phar /usr/local/bin/phpunit
+ENV COMPOSER_ALLOW_SUPERUSER 1
+ENV COMPOSER_HOME /tmp
+ENV COMPOSER_VERSION 1.9.1
 
-# Install PHP Code sniffer
-# RUN curl -OL https://squizlabs.github.io/PHP_CodeSniffer/phpcs.phar \
-#     && chmod 755 phpcs.phar \
-#     && mv phpcs.phar /usr/local/bin/ \
-#     && ln -s /usr/local/bin/phpcs.phar /usr/local/bin/phpcs \
-#     && curl -OL https://squizlabs.github.io/PHP_CodeSniffer/phpcbf.phar \
-#     && chmod 755 phpcbf.phar \
-#     && mv phpcbf.phar /usr/local/bin/ \
-#     && ln -s /usr/local/bin/phpcbf.phar /usr/local/bin/phpcbf
+RUN set -eux; \
+  curl --silent --fail --location --retry 3 --output /tmp/installer.php --url https://raw.githubusercontent.com/composer/getcomposer.org/cb19f2aa3aeaa2006c0cd69a7ef011eb31463067/web/installer; \
+  php -r " \
+    \$signature = '48e3236262b34d30969dca3c37281b3b4bbe3221bda826ac6a9a62d6444cdb0dcd0615698a5cbe587c3f0fe57a54d8f5'; \
+    \$hash = hash('sha384', file_get_contents('/tmp/installer.php')); \
+    if (!hash_equals(\$signature, \$hash)) { \
+      unlink('/tmp/installer.php'); \
+      echo 'Integrity check failed, installer is either corrupt or worse.' . PHP_EOL; \
+      exit(1); \
+    }"; \
+  php /tmp/installer.php --no-ansi --install-dir=/usr/bin --filename=composer --version=${COMPOSER_VERSION}; \
+  composer --ansi --version --no-interaction; \
+  rm -f /tmp/installer.php; \
+  find /tmp -type d -exec chmod -v 1777 {} +
 
-# Install Node.js & Yarn
-# RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - \
-#     && echo "deb https://dl.yarnpkg.com/debian/ stable main" | tee /etc/apt/sources.list.d/yarn.list \
-#     && curl -sL https://deb.nodesource.com/setup_8.x | bash - \
-#     && apt-get install -y nodejs build-essential yarn \
-#     && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+COPY docker-entrypoint.sh /docker-entrypoint.sh
 
-COPY msmtprc /etc/
-COPY entrypoint.sh /entrypoint.sh
-ENTRYPOINT ["/entrypoint.sh"]
-CMD ["php", "-a"]
+WORKDIR /app
+
+ENTRYPOINT ["/bin/sh", "/docker-entrypoint.sh"]
+
+CMD ["composer"]
